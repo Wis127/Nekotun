@@ -4,6 +4,20 @@ import threading
 HOST = "127.0.0.1"  # For now only this computer.
 PORT = 9000
 
+clients = []
+clients_lock = threading.Lock()
+
+def add_client(addr):
+    with clients_lock:
+        clients.append(addr)
+        print(f"+{addr} joined | online {len(clients)}")
+
+def remove_client(addr):
+    with clients_lock:
+        clients.remove(addr)
+        print(f"-{addr} left | online {len(clients)}")
+
+
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # tcp
 server.bind((HOST, PORT))
 
@@ -12,15 +26,21 @@ print("waiting...")
 
 def handle_client(conn, addr):
     print("connected:", addr)
-    with conn:
-        while True:
-            data = conn.recv(2048)
-            if not data:          # b"" means the client left
-                break
-            print(addr, "says:", data.decode())
-            conn.sendall(data)    # SAY it back
-    print("disconnected:", addr)
-    conn.close()
+    add_client(addr)
+    try:
+        with conn:
+            while True:
+                data = conn.recv(2048)
+                if not data:          # b"" means the client left
+                    break
+                print(addr, "says:", data.decode())
+                conn.sendall(data) # SAY it back
+    except  ConnectionResetError as e :
+        print(e)
+    finally:
+        remove_client(addr)  # client closed suddenly (e.g. killed terminal)
+        print("disconnected:", addr)
+        conn.close()
 
 
 while True: # threading process
