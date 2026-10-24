@@ -1,7 +1,7 @@
 import subprocess
 
 result = subprocess.run(
-    ["powershell", "-Command", "ipconfig"],
+    ["powershell", "-Command", "Get-VpnConnection -Name 'PyVPN'"],
     capture_output=True,
     text=True,
 )
