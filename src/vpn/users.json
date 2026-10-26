@@ -1,0 +1,9 @@
+{
+  "alice": {
+    "salt": "f5a70d843ce3fe631cef65f03c8d98f7",
+    "hash": "0cb709b6e9670c3926686167e20ae0d79a379e548589e28520c2a64c0cdbf871b2f12fe45cc97bd27dc195554d970d01e3ce7dc8feaa0130309743d51118211d",
+    "n": 16384,
+    "r": 8,
+    "p": 1
+  }
+}

@@ -1,5 +1,7 @@
 import socket
 import threading
+from protocol import send_msg, recv_msg
+
 
 HOST = "127.0.0.1"  # For now only this computer.
 PORT = 9000
@@ -30,11 +32,11 @@ def handle_client(conn, addr):
     try:
         with conn:
             while True:
-                data = conn.recv(2048)
-                if not data:          # b"" means the client left
+                data = recv_msg(conn)
+                if data is None:          # b"" means the client left
                     break
                 print(addr, "says:", data.decode())
-                conn.sendall(data) # SAY it back
+                send_msg(conn,data) # SAY it back
     except  ConnectionResetError as e :
         print(e)
     finally:
