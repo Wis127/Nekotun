@@ -1,10 +1,12 @@
 from asyncio.timeouts import Timeout
+from operator import add
 import socket
 from this import d
 import threading
 from protocol import send_msg, recv_msg
 from auth import check_login
 import time
+import ssl #
 
 MAX_FAILS = 5
 LOCK_SECONDS = 60
@@ -84,8 +86,14 @@ def login(conn):
     send_msg(conn,b"DENIED")
     return None
 
-def handle_client(conn, addr):
-    print("connected:", addr)
+def handle_client(raw_conn, addr):
+    raw_conn.settimeout(10)
+    try:
+        conn = tls.wrap_socket(raw_conn,server_side=True)
+    except (ssl.SSLError,OSError) as e:
+        print(addr,"TLS failed",e)
+        raw_conn.close()
+        return
     add_client(addr)
     try:
         with conn:
