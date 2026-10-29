@@ -11,19 +11,20 @@ with socket.create_connection(("127.0.0.1", 9000)) as raw:
         send_msg(s,input("username:").encode())
         send_msg(s,getpass.getpass("password:").encode())
 
-    reply = recv_msg(s)
-    if reply != b"OK":
-        print("login failed")
-        raise SystemExit(1)
-    print("logged in!")
+        reply = recv_msg(s)
+        if reply != b"OK":
+            print("login failed")
+            raise SystemExit(1)
+        print("logged in!")
 
-    while True:
-        text = input("> ")
-        if text == "quit":
-            break
-        send_msg(s,text.encode())
-        data = recv_msg(s)
-        if data is None:
-            print("server closed the connection")
-            break
-        print("echo:",data.decode())
+        send_msg(s,b"example.com:80")
+        if recv_msg(s) != b"OK":
+            print("connection failed")
+            raise SystemExit(1)
+
+        s.sendall(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            print(chunk.decode(errors="replace"), end="")
