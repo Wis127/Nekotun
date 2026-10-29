@@ -4,8 +4,8 @@ import ssl
 import threading
 import time
 
-from auth import check_login
-from protocol import recv_msg, send_msg
+from vpn.auth import check_login
+from vpn.protocol import recv_msg, send_msg
 
 
 def open_target(target):
