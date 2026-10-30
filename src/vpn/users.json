@@ -19,5 +19,12 @@
     "n": 16384,
     "r": 8,
     "p": 1
+  },
+  "cloak": {
+    "salt": "ccdfe16146aaefea5cbf36472db8105a",
+    "hash": "a57a3ef17c03617f0932c0039de301b9da4855a764f3caa40953073bb35e1a8818bb30975b0d3bc3fb92797a9fd5ca5fa55b00a412e51def44c3f4cf2fe1346f",
+    "n": 16384,
+    "r": 8,
+    "p": 1
   }
 }

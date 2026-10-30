@@ -5,7 +5,7 @@ import threading
 import time
 
 from vpn.auth import check_login
-from vpn.protocol import recv_msg, send_msg
+from vpn.protocol import pipe, recv_msg, send_msg
 
 
 def open_target(target):
@@ -21,21 +21,6 @@ def open_target(target):
     remote = socket.create_connection((str(ip), port), timeout=10)
     remote.settimeout(None)
     return remote
-
-
-def pipe(src, dst):
-    """Copy bytes from src to dst until one side closes"""
-    try:
-        while True:
-            data = src.recv(4096)
-            if not data:
-                break
-            dst.sendall(data)
-    except OSError:
-        pass
-    finally:
-        src.close()
-        dst.close()
 
 
 MAX_FAILS = 5
