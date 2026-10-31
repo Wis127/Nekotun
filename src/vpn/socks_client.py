@@ -11,7 +11,7 @@ LISTEN = ("127.0.0.1", 1080)  # where the browser connects
 
 tls = ssl.create_default_context(cafile="cert.pem")
 USERNAME = input("username: ")
-PASSWORD = getpass.getpass("passoword: ")
+PASSWORD = getpass.getpass("password: ")
 
 OK_REPLY = b"\x05\x00\x00\x01" + bytes(6)  # SOCKS "success"
 FAIL_REPLY = b"\x05\x01\x00\x01" + bytes(6)  # SOCKS "general failure"
@@ -23,6 +23,37 @@ def read(sock, n):
     if data is None:
         raise ConnectionError("browser closed")
     return data
+
+
+def connect_server():
+    raw = socket.create_connection(SERVER, timeout=10)
+    return tls.wrap_socket(raw, server_hostname="localhost")
+
+
+def get_token(username, password):
+    """Log in with the password once. Return a token , or None"""
+    with connect_server() as s:
+        send_msg(s, b"PASS")
+        send_msg(s, username.encode())
+        send_msg(s, password.encode())
+        if recv_msg(s) != b"OK":
+            return None
+        return recv_msg(s)
+
+
+def open_tunnel(target):
+    s = connect_server()
+    send_msg(s, b"TOKEN")
+    send_msg(s, TOKEN)
+    if recv_msg(s) != b"OK":
+        s.close()
+        raise ConnectionError("token rejected")
+    send_msg(s, target.encode())
+    if recv_msg(s) != b"OK":
+        s.close()
+        raise ConnectionError(f"server could not reach {target}")
+        s.settimeout(None)
+        return s
 
 
 def socks_handshake(browser):
@@ -51,23 +82,6 @@ def socks_handshake(browser):
     return f"{host}:{port}"
 
 
-def open_tunnel(target):
-    """Connect to the vpn server , login and ask it to reach target"""
-    raw = socket.create_connection(SERVER, timeout=10)
-    s = tls.wrap_socket(raw, server_hostname="localhost")
-    send_msg(s, USERNAME.encode())
-    send_msg(s, PASSWORD.encode())
-    if recv_msg(s) != b"OK":
-        s.close()
-        raise ConnectionError("login failed")
-    send_msg(s, target.encode())
-    if recv_msg(s) != b"OK":
-        s.close()
-        raise ConnectionError(f"server could not reach {target}")
-    s.settimeout(None)
-    return s
-
-
 def handle_browser(browser):
     try:
         target = socks_handshake(browser)
@@ -87,6 +101,14 @@ def handle_browser(browser):
     pipe(browser, tunnel)
 
 
+TOKEN = get_token(USERNAME, PASSWORD)
+if TOKEN is None:
+    print("login failed")
+    raise SystemExit(1)
+del PASSWORD
+print("logged in!")
+
+
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(LISTEN)
@@ -95,3 +117,14 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
     while True:
         browser, _ = listener.accept()
         threading.Thread(target=handle_browser, args=(browser,), daemon=True).start()
+
+
+# Why it happens
+
+# At the bottom you run del PASSWORD after logging in. Ruff checks function bodies as if they run after the whole file, and by then PASSWORD is gone. So every function that reads PASSWORD gets the warning.
+
+# It would also fail when you run it. You have two open_tunnel functions, and Python keeps the last one. That's the old one that logs in with PASSWORD. So:
+
+# login → del PASSWORD → browser connects → open_tunnel() reads PASSWORD → NameError
+
+# NameError isn't caught by except (OSError, ValueError), so that thread dies

@@ -1,4 +1,5 @@
 import ipaddress
+import secrets
 import socket
 import ssl
 import threading
@@ -6,6 +7,30 @@ import time
 
 from vpn.auth import check_login
 from vpn.protocol import pipe, recv_msg, send_msg
+
+TOKEN_TTL = 3600  # tokens last 1 hour
+tokens = {}  # tokens = username , expires at :)
+tokens_lock = threading.Lock()
+
+
+def new_toke(username):
+    token = secrets.token_hex(32).encode()
+    with tokens_lock:
+        tokens[token] = (username, time.time() + TOKEN_TTL)
+    return token
+
+
+def check_token(token):
+    """Retunr the username if the token is valid , else None"""
+    with tokens_lock:
+        entry = tokens.get(token)
+        if entry is None:
+            return None
+        username, expires = entry
+        if time.time() > expires:
+            del tokens[token]  # expired token : throw it away
+            return None
+        return username
 
 
 def open_target(target):
@@ -85,6 +110,21 @@ tls.load_cert_chain("cert.pem", "key.pem")
 
 def login(conn):
     """Return the username if login succeeds , else None"""
+    kind = recv_msg(conn)
+
+    if kind == b"TOKEN":
+        token = recv_msg(conn)
+        user = check_token(token) if token else None
+        if user is None:
+            send_msg(conn, b"DENIED")
+            return None
+        send_msg(conn, b"OK")
+        conn.settimeout(None)
+        return user
+
+    if kind != b"PASS":
+        return None
+
     username = recv_msg(conn)
     password = recv_msg(conn)
     if username is None or password is None:
