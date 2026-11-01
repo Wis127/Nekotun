@@ -5,6 +5,7 @@ import ssl
 import threading
 import time
 
+from vpn import mux
 from vpn.auth import check_login
 from vpn.protocol import pipe, recv_msg, send_msg
 
@@ -13,7 +14,7 @@ tokens = {}  # tokens = username , expires at :)
 tokens_lock = threading.Lock()
 
 
-def new_toke(username):
+def new_token(username):
     token = secrets.token_hex(32).encode()
     with tokens_lock:
         tokens[token] = (username, time.time() + TOKEN_TTL)
@@ -80,6 +81,7 @@ def record_success(username):
 
 HOST = "127.0.0.1"  # For now only this computer.
 PORT = 9000
+ALLOW_MUX = True
 
 clients = []
 clients_lock = threading.Lock()
@@ -95,17 +97,6 @@ def remove_client(addr):
     with clients_lock:
         clients.remove(addr)
         print(f"-{addr} left | online {len(clients)}")
-
-
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # tcp
-server.bind((HOST, PORT))
-
-
-server.listen(5)  # server started
-print("waiting...")
-
-tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-tls.load_cert_chain("cert.pem", "key.pem")
 
 
 def login(conn):
@@ -138,12 +129,68 @@ def login(conn):
     if check_login(username, password.decode()):
         record_success(username)
         send_msg(conn, b"OK")
+        send_msg(conn, new_token(username))
         conn.settimeout(None)  # No timeout after login
         return username
     record_fail(username)
     time.sleep(1)
     send_msg(conn, b"DENIED")
     return None
+
+
+def run_mux(conn, user):
+    """Serve many streams over one tunnel until the client hangs up"""
+    tunnel = mux.Tunnel(conn)
+    streams = {}
+    streams_lock = threading.Lock()
+
+    def close_stream(sid):
+        with streams_lock:
+            remote = streams.pop(sid, None)
+        if remote:
+            remote.close()
+
+    def open_stream(sid, target):
+        try:
+            remote = open_target(target)
+        except (OSError, ValueError) as e:
+            print(user, "failed", target, e)
+            tunnel.send(sid, mux.OPEN_FAIL)
+            return
+        with streams_lock:
+            streams[sid] = remote
+        tunnel.send(sid, mux.OPEN_OK)
+        print(user, "->", target, f"(stream {sid})")
+        tunnel.pump(sid, remote)  # website -> tunnel , until it ends
+        close_stream(sid)
+
+    try:
+        while True:
+            msg = tunnel.recv()
+            if msg is None:
+                break
+            sid, kind, payload = msg
+            if kind == mux.OPEN:
+                target = payload.decode(errors="replace")
+                threading.Thread(
+                    target=open_stream, args=(sid, target), daemon=True
+                ).start()
+            elif kind == mux.DATA:
+                with streams_lock:
+                    remote = streams.get(sid)
+                if remote:
+                    try:
+                        remote.sendall(payload)
+                    except OSError:
+                        close_stream(sid)
+            elif kind == mux.CLOSE:
+                close_stream(sid)
+    finally:
+        # Tunnel is gone: close every website connection
+        with streams_lock:
+            for remote in streams.values():
+                remote.close()
+            streams.clear()
 
 
 def handle_client(raw_conn, addr):
@@ -161,10 +208,18 @@ def handle_client(raw_conn, addr):
             if user is None:
                 return
             print(addr, "logged in as", user)
-            target = recv_msg(conn)
-            if target is None:
+            first = recv_msg(conn)
+            if first is None:
                 return
-            target = target.decode()
+            if first == b"MUX":
+                if not ALLOW_MUX:
+                    print(addr, user, "Tried MUX but it is disabled")
+                    return
+                print(addr, user, "opend a shared tunnel")
+                run_mux(conn, user)
+                return
+
+            target = first.decode()
             try:
                 remote = open_target(target)
             except (OSError, ValueError) as e:
@@ -185,6 +240,15 @@ def handle_client(raw_conn, addr):
         print("disconnected:", addr)
         conn.close()
 
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # tcp
+server.bind((HOST, PORT))
+server.listen(5)  # server started
+
+
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain("cert.pem", "key.pem")
+print("waiting...")
 
 while True:  # threading process
     conn, addr = server.accept()  # accept a connection

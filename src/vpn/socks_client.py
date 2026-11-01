@@ -1,10 +1,19 @@
+import argparse
 import getpass
 import socket
 import ssl
 import struct
 import threading
 
+from vpn import mux
 from vpn.protocol import pipe, recv_exact, recv_msg, send_msg
+
+parser = argparse.ArgumentParser(description="Local SOCKS5 proxy for the VPN")
+parser.add_argument(
+    "--mux", action="store_true", help="share one tunnel for all connections"
+)
+args = parser.parse_args()
+
 
 SERVER = ("127.0.0.1", 9000)  # VPN SERVER
 LISTEN = ("127.0.0.1", 1080)  # where the browser connects
@@ -41,19 +50,25 @@ def get_token(username, password):
         return recv_msg(s)
 
 
-def open_tunnel(target):
+def login_with_token():
+    """Open a connection to the server and log in with the token"""
     s = connect_server()
     send_msg(s, b"TOKEN")
     send_msg(s, TOKEN)
     if recv_msg(s) != b"OK":
         s.close()
         raise ConnectionError("token rejected")
+    return s
+
+
+def open_tunnel(target):
+    s = login_with_token()
     send_msg(s, target.encode())
     if recv_msg(s) != b"OK":
         s.close()
         raise ConnectionError(f"server could not reach {target}")
-        s.settimeout(None)
-        return s
+    s.settimeout(None)
+    return s
 
 
 def socks_handshake(browser):
@@ -82,9 +97,114 @@ def socks_handshake(browser):
     return f"{host}:{port}"
 
 
+mux_tunnel = None
+mux_lock = threading.Lock()  # protects everything below
+browsers = {}  # stream id  -> browser socket
+pending = {}  # stream id -> [Event,ok?] waiting for OPEN_OK
+next_id = 1
+
+
+def close_browser(sid):
+    with mux_lock:
+        browser = browsers.pop(sid, None)
+    if browser:
+        browser.close()
+
+
+def mux_reader(tunnel):
+    """The single reader: route every envelope from the server by stream id"""
+    global mux_tunnel
+    try:
+        while True:
+            msg = tunnel.recv()
+            if msg is None:
+                break
+            sid, kind, payload = msg
+            if kind in (mux.OPEN_OK, mux.OPEN_FAIL):
+                with mux_lock:
+                    slot = pending.pop(sid, None)
+                    browser = browsers.get(sid)
+                if slot is None:
+                    continue
+                ok = kind == mux.OPEN_OK
+                if ok and browser:
+                    try:
+                        browser.sendall(OK_REPLY)  # sent here , so its before any data
+                    except OSError:
+                        ok = False
+                slot[1] = ok
+                slot[0].set()  # wake up the waiting handle_mux
+            elif kind == mux.DATA:
+                with mux_lock:
+                    browser = browsers.get(sid)
+                if browser:
+                    try:
+                        browser.sendall(payload)
+                    except OSError:
+                        close_browser(sid)
+            elif kind == mux.CLOSE:
+                close_browser(sid)
+    except OSError:
+        pass
+    finally:
+        print("shared tunnel close")
+        with mux_lock:
+            if mux_tunnel is tunnel:
+                mux_tunnel = None  # Next browser connection reconnects
+            for slot in pending.values():
+                slot[0].set()
+            pending.clear()
+            for browser in browsers.values():
+                browser.close()
+            browsers.clear()
+
+
+def get_mux_tunnel():
+    """return the shared tunnel, connecting it the first time"""
+    global mux_tunnel
+    with mux_lock:
+        if mux_tunnel is None:
+            s = login_with_token()
+            send_msg(s, b"MUX")
+            s.settimeout(None)
+            mux_tunnel = mux.Tunnel(s)
+            threading.Thread(target=mux_reader, args=(mux_tunnel,), daemon=True).start()
+            print("shared tunnel opened")
+        return mux_tunnel
+
+
+def handle_mux(browser, target):
+    global next_id
+    tunnel = get_mux_tunnel()
+    slot = [threading.Event(), False]
+    with mux_lock:
+        sid = next_id
+        next_id += 1
+        pending[sid] = slot
+        browsers[sid] = browser
+    tunnel.send(sid, mux.OPEN, target.encode())
+
+    if not slot[0].wait(15) or not slot[1]:
+        with mux_lock:
+            pending.pop(sid, None)
+            browsers.pop(sid, None)
+        try:
+            tunnel.send(sid, mux.CLOSE)
+        except OSError:
+            pass
+        raise ConnectionError(f"server could not reach  {target}")
+
+    print("->", target, f"(stream{sid})")
+    tunnel.pump(sid, browser)  # browser -> tunnel, sends CLOSE at the end
+    close_browser(sid)
+
+
 def handle_browser(browser):
     try:
         target = socks_handshake(browser)
+        if args.mux:
+            handle_mux(browser, target)
+            return
         tunnel = open_tunnel(target)
     except (OSError, ValueError) as e:
         print("failed", e)
@@ -117,14 +237,3 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
     while True:
         browser, _ = listener.accept()
         threading.Thread(target=handle_browser, args=(browser,), daemon=True).start()
-
-
-# Why it happens
-
-# At the bottom you run del PASSWORD after logging in. Ruff checks function bodies as if they run after the whole file, and by then PASSWORD is gone. So every function that reads PASSWORD gets the warning.
-
-# It would also fail when you run it. You have two open_tunnel functions, and Python keeps the last one. That's the old one that logs in with PASSWORD. So:
-
-# login → del PASSWORD → browser connects → open_tunnel() reads PASSWORD → NameError
-
-# NameError isn't caught by except (OSError, ValueError), so that thread dies
