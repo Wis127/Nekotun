@@ -7,7 +7,9 @@ authors = [
     { name = "CLoaKY233", email = "laysheth1@gmail.com" }
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "cryptography>=50.0.2",
+]
 
 [project.scripts]
 vpn = "vpn:main"
