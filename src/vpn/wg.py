@@ -1,4 +1,5 @@
 import base64
+import subprocess
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -8,6 +9,45 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
+
+WG_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
+
+
+class WgError(Exception):
+    pass
+
+
+def run(cmd):
+    """Run a command , raise WgError if it fails."""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise WgError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"exit {result.returncode}"
+        )
+    return result.stdout
+
+
+def connect(conf_path):
+    """Start the tunnel. Tunnel name = file (client.conf ->
+    client0)."""
+    path = Path(conf_path).resolve()
+    if not path.exists():
+        raise WgError(f"config not found: {path}")
+    run([WG_EXE, "/installtunnelservice", str(path)])
+
+
+def disconnect(name):
+    run([WG_EXE, "/uninstalltunnelservice", name])
+
+
+def status(name):
+    """Return True if the tunnel service is running."""
+    result = subprocess.run(
+        ["sc", "query", f"WireGuardTunnel${name}"], capture_output=True, text=True
+    )
+    return "RUNNING" in result.stdout
 
 
 def generate_keypair():
@@ -85,13 +125,13 @@ if __name__ == "__main__":
     server_priv, server_pub = generate_keypair()
     client_priv, client_pub = generate_keypair()
 
+    s = save_config(
+        "wg-configs/wg0.conf",
+        server_config(server_priv, [(client_pub, f"{TUNNEL_NET},2")]),
+    )
 
-s = save_config(
-    "wg-configs/wg0.conf", server_config(server_priv, [(client_pub, f"{TUNNEL_NET},2")])
-)
-
-c = save_config(
-    "wg-configs/client.conf", client_config(client_priv, server_pub, server_ip)
-)
-print("wrote", s)
-print("wrote", c)
+    c = save_config(
+        "wg-configs/client.conf", client_config(client_priv, server_pub, server_ip)
+    )
+    print("wrote", s)
+    print("wrote", c)

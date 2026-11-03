@@ -97,6 +97,14 @@ def socks_handshake(browser):
     return f"{host}:{port}"
 
 
+class Waiter:
+    """One browser waiting for OPEN_OK / OPEN_FAIL."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.ok = False
+
+
 mux_tunnel = None
 mux_lock = threading.Lock()  # protects everything below
 browsers = {}  # stream id  -> browser socket
@@ -152,7 +160,7 @@ def mux_reader(tunnel):
             if mux_tunnel is tunnel:
                 mux_tunnel = None  # Next browser connection reconnects
             for slot in pending.values():
-                slot[0].set()
+                slot.event.set()
             pending.clear()
             for browser in browsers.values():
                 browser.close()
@@ -176,7 +184,7 @@ def get_mux_tunnel():
 def handle_mux(browser, target):
     global next_id
     tunnel = get_mux_tunnel()
-    slot = [threading.Event(), False]
+    slot = Waiter()
     with mux_lock:
         sid = next_id
         next_id += 1
@@ -184,7 +192,7 @@ def handle_mux(browser, target):
         browsers[sid] = browser
     tunnel.send(sid, mux.OPEN, target.encode())
 
-    if not slot[0].wait(15) or not slot[1]:
+    if not slot.event.wait(15) or not slot.ok:
         with mux_lock:
             pending.pop(sid, None)
             browsers.pop(sid, None)
