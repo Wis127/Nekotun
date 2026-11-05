@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+#Folders
+wg-configs/
+
 # Virtual environments
 .venv
 

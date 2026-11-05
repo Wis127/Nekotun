@@ -63,7 +63,7 @@ def generate_keypair():
     )
 
 
-WG_PORT = 5120
+WG_PORT = 51820
 TUNNEL_NET = "10.8.0"
 # Tunnel addresses : 10.8.0.1 = server, .2 , .3 ...... = clients
 
@@ -91,21 +91,21 @@ PersistentKeepalive = 25
 
 
 def server_config(server_private, peers, out_iface="ens5"):
-    """Config text for the Linux server. peers = [(public_key, tunnel_ip), ....]"""
+    """Config text for the Linux server. peers = [(public_key, tunnel_ip), ...]"""
     text = f"""[Interface]
-    Address = {TUNNEL_NET}.1/24
-    ListenPort = {WG_PORT}
-    PrivateKey = {server_private}
-    PostUp = iptables -t nat -D POSTROUTING -s {TUNNEL_NET}.0/24 -o {out_iface} -j MASQUERADE
-    PostDown = iptables -t  nat -D POSTROUTING -s {TUNNEL_NET}.0/24 -o {out_iface} -j MASQUERADE"""
-
+Address = {TUNNEL_NET}.1/24
+ListenPort = {WG_PORT}
+PrivateKey = {server_private}
+PostUp = iptables -t nat -A POSTROUTING -s {TUNNEL_NET}.0/24 -o {out_iface} -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s {TUNNEL_NET}.0/24 -o {out_iface} -j MASQUERADE
+"""
     for public_key, tunnel_ip in peers:
         text += f"""
-    [Peer]
-    PublicKey = {public_key}
-    AllowedIPs {tunnel_ip}/32
-    """
-        return text
+[Peer]
+PublicKey = {public_key}
+AllowedIPs = {tunnel_ip}/32
+"""
+    return text
 
 
 def save_config(path, text):
