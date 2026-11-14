@@ -1,11 +1,13 @@
 import ipaddress
+import os
 import secrets
 import socket
 import ssl
 import threading
 import time
 
-from vpn.auth import check_login
+from vpn import mux
+from vpn.auth import add_user, check_login
 from vpn.protocol import pipe, recv_msg, send_msg
 
 TOKEN_TTL = 3600  # tokens last 1 hour
@@ -13,7 +15,7 @@ tokens = {}  # tokens = username , expires at :)
 tokens_lock = threading.Lock()
 
 
-def new_toke(username):
+def new_token(username):
     token = secrets.token_hex(32).encode()
     with tokens_lock:
         tokens[token] = (username, time.time() + TOKEN_TTL)
@@ -37,7 +39,7 @@ def open_target(target):
     """Connect to host:port . refuse private/local adresses"""
     host, _, port = target.rpartition(":")
     port = int(port)
-    family, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[
+    _, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[
         0
     ]
     ip = ipaddress.ip_address(sockaddr[0])
@@ -58,7 +60,7 @@ failed_lock = threading.Lock()
 
 def is_locked(username):
     with failed_lock:
-        count, until = failed.get(username, (0, 0))
+        _, until = failed.get(username, (0, 0))
         return time.time() < until
 
 
@@ -78,8 +80,9 @@ def record_success(username):
         failed.pop(username, None)
 
 
-HOST = "127.0.0.1"  # For now only this computer.
+HOST = os.environ.get("VPN_HOST", "127.0.0.1")  # AWS sets VPN_HOST=0.0.0.0
 PORT = 9000
+ALLOW_MUX = True
 
 clients = []
 clients_lock = threading.Lock()
@@ -97,17 +100,6 @@ def remove_client(addr):
         print(f"-{addr} left | online {len(clients)}")
 
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # tcp
-server.bind((HOST, PORT))
-
-
-server.listen(5)  # server started
-print("waiting...")
-
-tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-tls.load_cert_chain("cert.pem", "key.pem")
-
-
 def login(conn):
     """Return the username if login succeeds , else None"""
     kind = recv_msg(conn)
@@ -121,6 +113,10 @@ def login(conn):
         send_msg(conn, b"OK")
         conn.settimeout(None)
         return user
+
+    if kind == b"CHANGE":
+        change_password(conn)
+        return None  # this connection was only for the change
 
     if kind != b"PASS":
         return None
@@ -138,12 +134,111 @@ def login(conn):
     if check_login(username, password.decode()):
         record_success(username)
         send_msg(conn, b"OK")
+        send_msg(conn, new_token(username))
         conn.settimeout(None)  # No timeout after login
         return username
     record_fail(username)
     time.sleep(1)
     send_msg(conn, b"DENIED")
     return None
+
+
+MIN_PASSWORD = 8
+users_lock = threading.Lock()  # one users.json write at a time
+
+
+def revoke_tokens(username):
+    """Sign this user out everywhere (old tokens stop working)."""
+    with tokens_lock:
+        for token in [t for t, (u, _) in tokens.items() if u == username]:
+            del tokens[token]
+
+
+def change_password(conn):
+    """CHANGE, username, old password, new password -> OK + new token | DENIED | WEAK"""
+    username = recv_msg(conn)
+    old = recv_msg(conn)
+    new = recv_msg(conn)
+    if username is None or old is None or new is None:
+        return
+    username, old, new = username.decode(), old.decode(), new.decode()
+
+    # same protection as a normal login: lockout + slow failure
+    if is_locked(username):
+        send_msg(conn, b"DENIED")
+        return
+    if not check_login(username, old):
+        record_fail(username)
+        time.sleep(1)
+        send_msg(conn, b"DENIED")
+        return
+    record_success(username)
+
+    if len(new) < MIN_PASSWORD or new == old:
+        send_msg(conn, b"WEAK")
+        return
+
+    with users_lock:
+        add_user(username, new)  # new salt + new scrypt hash
+    revoke_tokens(username)  # other devices must sign in again
+    print(username, "changed their password")
+    send_msg(conn, b"OK")
+    send_msg(conn, new_token(username))  # keep THIS device signed in
+
+
+def run_mux(conn, user):
+    """Serve many streams over one tunnel until the client hangs up"""
+    tunnel = mux.Tunnel(conn)
+    streams = {}
+    streams_lock = threading.Lock()
+
+    def close_stream(sid):
+        with streams_lock:
+            remote = streams.pop(sid, None)
+        if remote:
+            remote.close()
+
+    def open_stream(sid, target):
+        try:
+            remote = open_target(target)
+        except (OSError, ValueError) as e:
+            print(user, "failed", target, e)
+            tunnel.send(sid, mux.OPEN_FAIL)
+            return
+        with streams_lock:
+            streams[sid] = remote
+        tunnel.send(sid, mux.OPEN_OK)
+        print(user, "->", target, f"(stream {sid})")
+        tunnel.pump(sid, remote)  # website -> tunnel , until it ends
+        close_stream(sid)
+
+    try:
+        while True:
+            msg = tunnel.recv()
+            if msg is None:
+                break
+            sid, kind, payload = msg
+            if kind == mux.OPEN:
+                target = payload.decode(errors="replace")
+                threading.Thread(
+                    target=open_stream, args=(sid, target), daemon=True
+                ).start()
+            elif kind == mux.DATA:
+                with streams_lock:
+                    remote = streams.get(sid)
+                if remote:
+                    try:
+                        remote.sendall(payload)
+                    except OSError:
+                        close_stream(sid)
+            elif kind == mux.CLOSE:
+                close_stream(sid)
+    finally:
+        # Tunnel is gone: close every website connection
+        with streams_lock:
+            for remote in streams.values():
+                remote.close()
+            streams.clear()
 
 
 def handle_client(raw_conn, addr):
@@ -161,10 +256,18 @@ def handle_client(raw_conn, addr):
             if user is None:
                 return
             print(addr, "logged in as", user)
-            target = recv_msg(conn)
-            if target is None:
+            first = recv_msg(conn)
+            if first is None:
                 return
-            target = target.decode()
+            if first == b"MUX":
+                if not ALLOW_MUX:
+                    print(addr, user, "Tried MUX but it is disabled")
+                    return
+                print(addr, user, "opend a shared tunnel")
+                run_mux(conn, user)
+                return
+
+            target = first.decode()
             try:
                 remote = open_target(target)
             except (OSError, ValueError) as e:
@@ -185,6 +288,15 @@ def handle_client(raw_conn, addr):
         print("disconnected:", addr)
         conn.close()
 
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # tcp
+server.bind((HOST, PORT))
+server.listen(5)  # server started
+
+
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain("cert.pem", "key.pem")
+print("waiting...")
 
 while True:  # threading process
     conn, addr = server.accept()  # accept a connection

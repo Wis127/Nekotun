@@ -1,9 +1,9 @@
-import hashlib
 import getpass
-import json
-import sys
+import hashlib
 import hmac
+import json
 import os
+import sys
 
 USERS_FILE="users.json"
 N , R, P = 2**14,8,1

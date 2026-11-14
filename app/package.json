@@ -1,0 +1,19 @@
+{
+  "name": "nekotun",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "build": "cd ui && bun run build",
+    "start": "bun run build && electron .",
+    "dev": "concurrently -k -n ui,app \"bun run dev:ui\" \"bun run dev:app\"",
+    "dev:ui": "cd ui && bun run dev",
+    "dev:app": "bunx wait-on tcp:5173 && cross-env DEV_URL=http://localhost:5173 electron ."
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "cross-env": "^10.1.0",
+    "electron": "^45.2.3",
+    "wait-on": "^9.5.1"
+  },
+  "trustedDependencies": ["electron"]
+}

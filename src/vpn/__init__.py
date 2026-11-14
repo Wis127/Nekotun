@@ -1,2 +1,4 @@
 def main() -> None:
-    print("hello")
+    from vpn.cli import main as cli_main
+
+    cli_main()
