@@ -5,10 +5,17 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import type { Settings as S } from "@/lib/settings"
+import { DnsCard } from "@/pages/DnsCard"
 
-type Props = { settings: S; update: <K extends keyof S>(key: K, value: S[K]) => void }
+type Props = {
+  settings: S
+  update: <K extends keyof S>(key: K, value: S[K]) => void
+  dns: DnsChoice | "custom" | null
+  vpnOn: boolean
+  onDnsChanged: (choice: DnsChoice) => void
+}
 
-export function Settings({ settings, update }: Props) {
+export function Settings({ settings, update, dns, vpnOn, onDnsChanged }: Props) {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 w-full px-6 py-8 lg:px-10">
       <div>
@@ -61,38 +68,18 @@ export function Settings({ settings, update }: Props) {
         </CardContent>
       </Card>
 
+      <DnsCard dns={dns} vpnOn={vpnOn} onChanged={onDnsChanged} />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            Protection <Badge variant="secondary">Coming soon</Badge>
+            More protection <Badge variant="secondary">Coming soon</Badge>
           </CardTitle>
-          <CardDescription>These need changes in the Python engine first</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 opacity-60">
           <ToggleRow id="kill" title="Kill switch" text="Block all internet if the VPN drops." disabled />
           <Separator />
-          <ToggleRow id="split" title="Split tunneling" text="Choose which apps or sites skip the VPN." disabled />
-          <Separator />
           <ToggleRow id="boot" title="Launch at startup" text="Start NekoTun when Windows starts." disabled />
-          <Separator />
-          <div className="flex flex-col gap-3">
-            <div>
-              <p className="text-sm font-medium">DNS server</p>
-              <p className="text-sm text-muted-foreground">Who answers "what IP is this website?"</p>
-            </div>
-            <RadioGroup value="cloudflare" disabled className="flex flex-wrap gap-6">
-              {[
-                ["cloudflare", "Cloudflare 1.1.1.1"],
-                ["google", "Google 8.8.8.8"],
-                ["quad9", "Quad9 9.9.9.9"],
-              ].map(([v, text]) => (
-                <div key={v} className="flex items-center gap-2">
-                  <RadioGroupItem value={v} id={`dns-${v}`} />
-                  <Label htmlFor={`dns-${v}`}>{text}</Label>
-                </div>
-              ))}
-            </RadioGroup>
-          </div>
         </CardContent>
       </Card>
 

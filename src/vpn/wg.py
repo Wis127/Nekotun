@@ -112,8 +112,9 @@ def allowed_ips_for(mode, routes):
         return ["0.0.0.0/0"]
     if not nets:
         raise WgError("add at least one IP, network or domain")
+    tunnel = ipaddress.ip_network(f"{TUNNEL_NET}.0/24")
     if mode == "include":
-        return [str(n) for n in ipaddress.collapse_addresses(nets)]
+        return [str(n) for n in ipaddress.collapse_addresses([*nets, tunnel])]
 
     # exclude: start with "everything" and cut the listed networks out
     remaining = [ipaddress.ip_network("0.0.0.0/0")]
@@ -125,7 +126,44 @@ def allowed_ips_for(mode, routes):
             elif not n.subnet_of(ex):
                 nxt.append(n)  # no overlap: keep it
         remaining = nxt
-    return [str(n) for n in ipaddress.collapse_addresses(remaining)]
+    return [str(n) for n in ipaddress.collapse_addresses([*remaining, tunnel])]
+
+
+# --- DNS / ad blocking --------------------------------------------------------
+# "shield" = AdGuard Home on the VPN server, reachable only inside the tunnel
+DNS_CHOICES = {
+    "shield": "10.8.0.1",
+    "cloudflare": "1.1.1.1",
+    "google": "8.8.8.8",
+    "quad9": "9.9.9.9",
+}
+
+
+def get_dns(conf_path):
+    """Which DNS choice the client config uses ('custom' if it's none of ours)."""
+    path = Path(conf_path)
+    if not path.exists():
+        raise WgError(f"config not found: {path}")
+    m = re.search(r"^DNS\s*=\s*(.+)$", path.read_text(), flags=re.MULTILINE)
+    current = m.group(1).strip() if m else ""
+    choice = next((k for k, v in DNS_CHOICES.items() if v == current), "custom")
+    return {"choice": choice, "server": current}
+
+
+def set_dns(conf_path, choice):
+    """Rewrite the DNS line. Keys and everything else stay."""
+    if choice not in DNS_CHOICES:
+        raise WgError(f"DNS must be one of {list(DNS_CHOICES)}")
+    path = Path(conf_path)
+    if not path.exists():
+        raise WgError(f"config not found: {path}")
+    text, count = re.subn(
+        r"^DNS\s*=.*$", f"DNS = {DNS_CHOICES[choice]}", path.read_text(), flags=re.MULTILINE
+    )
+    if count != 1:
+        raise WgError("could not find exactly one DNS line in the config")
+    path.write_text(text)
+    return get_dns(path)
 
 
 def split_file(conf_path):

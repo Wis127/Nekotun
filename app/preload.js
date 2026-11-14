@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("vpn", {
   getSplit: () => ipcRenderer.invoke("vpn:split"),
   setSplit: (mode, routes, apps) => ipcRenderer.invoke("vpn:split", mode, routes, apps),
   apps: () => ipcRenderer.invoke("vpn", "wg-apps"),
+  getDns: () => ipcRenderer.invoke("vpn:dns"),
+  setDns: (choice) => ipcRenderer.invoke("vpn:dns", choice),
 });
 
 // Login. The token stays in main.js — the page only sees the username.

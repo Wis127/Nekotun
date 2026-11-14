@@ -1,4 +1,5 @@
 type SplitMode = "all" | "include" | "exclude"
+type DnsChoice = "shield" | "cloudflare" | "google" | "quad9"
 // What preload.js gives the page (window.vpn)
 type VpnResult = { ok: boolean; out: string }
 
@@ -12,6 +13,8 @@ interface Window {
     getSplit: () => Promise<VpnResult> // out = JSON {mode, routes}
     setSplit: (mode: SplitMode, routes: string[], apps: string[]) => Promise<VpnResult>
     apps: () => Promise<VpnResult> // out = JSON [{name, ips}]
+    getDns: () => Promise<VpnResult> // out = JSON {choice, server}
+    setDns: (choice: DnsChoice) => Promise<VpnResult>
   }
 }
 

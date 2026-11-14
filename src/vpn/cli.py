@@ -68,6 +68,19 @@ def cmd_split(args):
     print(json.dumps({**wg.get_split(conf), "allowed": len(allowed)}))
 
 
+def cmd_dns(args):
+    """Show or change DNS (e.g. 'shield' = ad blocking). Reconnects if the VPN is on."""
+    conf = CONF_DIR / f"{args.name}.conf"
+    if args.set is None:
+        print(json.dumps(wg.get_dns(conf)))
+        return
+    result = wg.set_dns(conf, args.set)
+    if wg.status(args.name):  # the new DNS only applies after reconnecting
+        wg.disconnect(args.name)
+        wg.connect(conf)
+    print(json.dumps(result))
+
+
 def cmd_apps(args):
     """Running apps with internet connections (JSON, used by the app picker)."""
     print(json.dumps(wg.list_apps()))
@@ -82,6 +95,10 @@ def main():
     p.add_argument("--server", required=True, help="server public IP")
     p.add_argument("--force", action="store_true", help="replace existing configs")
     p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("wg-dns", help="show or set DNS / ad blocking")
+    p.add_argument("--set", choices=list(wg.DNS_CHOICES), help="shield | cloudflare | google | quad9")
+    p.set_defaults(func=cmd_dns)
 
     sub.add_parser("wg-apps", help="apps with connections (JSON)").set_defaults(func=cmd_apps)
     sub.add_parser("wg-stats", help="traffic counters (JSON)").set_defaults(func=cmd_stats)

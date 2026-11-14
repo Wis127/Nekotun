@@ -51,6 +51,7 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
   const [ip, setIp] = useState<string | null>(null)
   const [serverId, setServerId] = useState(SERVERS[0].id)
   const [log, setLog] = useState<LogEntry[]>([])
+  const [dns, setDns] = useState<DnsChoice | "custom" | null>(null)
   const [since, setSince] = useState<number | null>(null) // when we connected
   const [now, setNow] = useState(Date.now())
   const busy = useRef(false) // true while connect/disconnect runs
@@ -123,6 +124,17 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
     })()
     // only once, on startup
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Which DNS is set (shield = ad blocking)
+  useEffect(() => {
+    window.vpn.getDns().then((r) => {
+      try {
+        setDns(JSON.parse(r.out).choice)
+      } catch {
+        setDns("custom")
+      }
+    })
   }, [])
 
   // Keep checking the status
@@ -225,6 +237,7 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
               server={server}
               connectedFor={on && since ? now - since : null}
               traffic={traffic}
+            adblock={dns === "shield"}
               onToggle={toggle}
             />
           )}
@@ -240,7 +253,18 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
           )}
           {page === "split" && <Split vpnOn={on} onApplied={(t) => addLog("info", t)} />}
           {page === "activity" && <Activity log={log} onClear={() => setLog([])} />}
-          {page === "settings" && <Settings settings={settings} update={update} />}
+          {page === "settings" && (
+            <Settings
+              settings={settings}
+              update={update}
+              dns={dns}
+              vpnOn={on}
+              onDnsChanged={(c) => {
+                setDns(c)
+                addLog("info", c === "shield" ? "Ad & tracker blocking on" : `DNS set to ${c}`)
+              }}
+            />
+          )}
           {page === "profile" && <Profile session={session} vpnOn={on} onLogout={logout} onSession={onSession} />}
         </div>
       </main>

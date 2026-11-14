@@ -11,7 +11,7 @@ const VPN_EXE = path.join(PROJECT, ".venv", "Scripts", "vpn.exe");
 
 // Run one of OUR commands with arguments, e.g. vpn(["wg-split", "--mode", "all"])
 function vpn(args) {
-  const commands = ["wg-up", "wg-down", "wg-status", "wg-stats", "wg-split", "wg-apps"];
+  const commands = ["wg-up", "wg-down", "wg-status", "wg-stats", "wg-split", "wg-apps", "wg-dns"];
   if (!Array.isArray(args) || !commands.includes(args[0])) throw new Error("not allowed");
   if (!args.every((a) => typeof a === "string" && a.length < 256)) throw new Error("bad argument");
   return new Promise((resolve) => {
@@ -50,6 +50,12 @@ async function publicIp() {
 }
 
 ipcMain.handle("vpn", (_event, command) => vpn([command]));
+// wg-dns: only our four named choices can be sent
+ipcMain.handle("vpn:dns", (_event, choice) => {
+  if (choice === undefined) return vpn(["wg-dns"]);
+  if (!["shield", "cloudflare", "google", "quad9"].includes(choice)) throw new Error("bad DNS choice");
+  return vpn(["wg-dns", `--set=${choice}`]);
+});
 ipcMain.handle("vpn:split", (_event, mode, routes, apps) => split(mode, routes, apps));
 ipcMain.handle("ip", () => publicIp());
 ipcMain.handle("auth:login", (_e, user, password, remember) => auth.login(user, password, !!remember));
