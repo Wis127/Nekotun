@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import secrets
 import socket
 import ssl
@@ -6,7 +7,7 @@ import threading
 import time
 
 from vpn import mux
-from vpn.auth import check_login
+from vpn.auth import add_user, check_login
 from vpn.protocol import pipe, recv_msg, send_msg
 
 TOKEN_TTL = 3600  # tokens last 1 hour
@@ -38,7 +39,7 @@ def open_target(target):
     """Connect to host:port . refuse private/local adresses"""
     host, _, port = target.rpartition(":")
     port = int(port)
-    family, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[
+    _, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[
         0
     ]
     ip = ipaddress.ip_address(sockaddr[0])
@@ -59,7 +60,7 @@ failed_lock = threading.Lock()
 
 def is_locked(username):
     with failed_lock:
-        count, until = failed.get(username, (0, 0))
+        _, until = failed.get(username, (0, 0))
         return time.time() < until
 
 
@@ -79,7 +80,7 @@ def record_success(username):
         failed.pop(username, None)
 
 
-HOST = "127.0.0.1"  # For now only this computer.
+HOST = os.environ.get("VPN_HOST", "127.0.0.1")  # AWS sets VPN_HOST=0.0.0.0
 PORT = 9000
 ALLOW_MUX = True
 
@@ -113,6 +114,10 @@ def login(conn):
         conn.settimeout(None)
         return user
 
+    if kind == b"CHANGE":
+        change_password(conn)
+        return None  # this connection was only for the change
+
     if kind != b"PASS":
         return None
 
@@ -136,6 +141,49 @@ def login(conn):
     time.sleep(1)
     send_msg(conn, b"DENIED")
     return None
+
+
+MIN_PASSWORD = 8
+users_lock = threading.Lock()  # one users.json write at a time
+
+
+def revoke_tokens(username):
+    """Sign this user out everywhere (old tokens stop working)."""
+    with tokens_lock:
+        for token in [t for t, (u, _) in tokens.items() if u == username]:
+            del tokens[token]
+
+
+def change_password(conn):
+    """CHANGE, username, old password, new password -> OK + new token | DENIED | WEAK"""
+    username = recv_msg(conn)
+    old = recv_msg(conn)
+    new = recv_msg(conn)
+    if username is None or old is None or new is None:
+        return
+    username, old, new = username.decode(), old.decode(), new.decode()
+
+    # same protection as a normal login: lockout + slow failure
+    if is_locked(username):
+        send_msg(conn, b"DENIED")
+        return
+    if not check_login(username, old):
+        record_fail(username)
+        time.sleep(1)
+        send_msg(conn, b"DENIED")
+        return
+    record_success(username)
+
+    if len(new) < MIN_PASSWORD or new == old:
+        send_msg(conn, b"WEAK")
+        return
+
+    with users_lock:
+        add_user(username, new)  # new salt + new scrypt hash
+    revoke_tokens(username)  # other devices must sign in again
+    print(username, "changed their password")
+    send_msg(conn, b"OK")
+    send_msg(conn, new_token(username))  # keep THIS device signed in
 
 
 def run_mux(conn, user):

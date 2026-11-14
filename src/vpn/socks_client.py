@@ -4,6 +4,7 @@ import socket
 import ssl
 import struct
 import threading
+from pathlib import Path
 
 from vpn import mux
 from vpn.protocol import pipe, recv_exact, recv_msg, send_msg
@@ -15,10 +16,12 @@ parser.add_argument(
 args = parser.parse_args()
 
 
-SERVER = ("127.0.0.1", 9000)  # VPN SERVER
+SERVER = ("16.4.103.77", 9000)  # login/proxy server on AWS
+PROJECT = Path(__file__).resolve().parents[2]
+CERT = PROJECT / "app" / "certs" / "server-cert.pem"  # the server's public cert
 LISTEN = ("127.0.0.1", 1080)  # where the browser connects
 
-tls = ssl.create_default_context(cafile="cert.pem")
+tls = ssl.create_default_context(cafile=CERT)
 USERNAME = input("username: ")
 PASSWORD = getpass.getpass("password: ")
 
@@ -36,7 +39,7 @@ def read(sock, n):
 
 def connect_server():
     raw = socket.create_connection(SERVER, timeout=10)
-    return tls.wrap_socket(raw, server_hostname="localhost")
+    return tls.wrap_socket(raw, server_hostname=SERVER[0])  # cert must name this IP
 
 
 def get_token(username, password):

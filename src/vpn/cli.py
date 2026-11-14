@@ -1,9 +1,10 @@
 import argparse
+import json
 from pathlib import Path
 
 from vpn import wg
 
-CONF_DIR = Path("wg-configs")
+CONF_DIR = Path(__file__).resolve().parents[2] / "wg-configs"  # C:\codes\VPN\wg-configs
 
 
 def cmd_keys(args):
@@ -45,6 +46,33 @@ def cmd_status(args):
     print(args.name, "is", "UP" if wg.status(args.name) else "DOWN")
 
 
+def cmd_stats(args):
+    """Print traffic counters as JSON (used by the app)."""
+    print(json.dumps(wg.stats(args.name)))
+
+
+def cmd_split(args):
+    """Show or change split tunneling. Reconnects if the VPN is on."""
+    conf = CONF_DIR / f"{args.name}.conf"
+    if args.mode is None:
+        print(json.dumps(wg.get_split(conf)))
+        return
+    routes = [r for r in (args.route or []) if r.strip()]
+    if len(routes) > wg.MAX_ROUTES:
+        raise wg.WgError(f"too many routes (max {wg.MAX_ROUTES})")
+    apps = [a for a in (args.app or []) if a.strip()]
+    allowed = wg.set_split(conf, args.mode, routes, apps)
+    if wg.status(args.name):  # new AllowedIPs only apply after reconnecting
+        wg.disconnect(args.name)
+        wg.connect(conf)
+    print(json.dumps({**wg.get_split(conf), "allowed": len(allowed)}))
+
+
+def cmd_apps(args):
+    """Running apps with internet connections (JSON, used by the app picker)."""
+    print(json.dumps(wg.list_apps()))
+
+
 def main():
     parser = argparse.ArgumentParser(prog="vpn", description="Python WireGuard Vpn")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -54,6 +82,15 @@ def main():
     p.add_argument("--server", required=True, help="server public IP")
     p.add_argument("--force", action="store_true", help="replace existing configs")
     p.set_defaults(func=cmd_config)
+
+    sub.add_parser("wg-apps", help="apps with connections (JSON)").set_defaults(func=cmd_apps)
+    sub.add_parser("wg-stats", help="traffic counters (JSON)").set_defaults(func=cmd_stats)
+
+    p = sub.add_parser("wg-split", help="show or set split tunneling")
+    p.add_argument("--mode", choices=wg.SPLIT_MODES, help="all | include | exclude")
+    p.add_argument("--route", action="append", help="IP, network or domain (repeat)")
+    p.add_argument("--app", action="append", help="program name, e.g. Discord (repeat)")
+    p.set_defaults(func=cmd_split)
 
     for name, func, text in [
         ("wg-up", cmd_up, "connect"),
