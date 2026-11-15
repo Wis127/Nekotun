@@ -21,3 +21,15 @@ contextBridge.exposeInMainWorld("auth", {
   logout: () => ipcRenderer.invoke("auth:logout"),
   changePassword: (oldPw, newPw) => ipcRenderer.invoke("auth:change", oldPw, newPw),
 });
+
+// Tray + launch at startup
+contextBridge.exposeInMainWorld("desktop", {
+  setTrayState: (state, server) => ipcRenderer.send("tray:state", state, server),
+  onTrayToggle: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("tray:toggle", listener);
+    return () => ipcRenderer.removeListener("tray:toggle", listener);
+  },
+  getStartup: () => ipcRenderer.invoke("startup:get"),
+  setStartup: (on) => ipcRenderer.invoke("startup:set", on),
+});

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Activity as ActivityIcon, Globe2, House, Loader2, Settings as SettingsIcon, Shield, Split as SplitIcon, UserRound } from "lucide-react"
+import { Activity as ActivityIcon, Globe2, House, Loader2, Settings as SettingsIcon, Split as SplitIcon, UserRound } from "lucide-react"
 import { toast } from "sonner"
 
+import { Wordmark } from "@/components/Logo"
 import { Toaster } from "@/components/ui/sonner"
 import { useSettings } from "@/lib/settings"
 import { useTraffic } from "@/lib/traffic"
@@ -137,6 +138,16 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
     })
   }, [])
 
+  // Tray: mirror the state, and let its menu use the same toggle as the button
+  useEffect(() => {
+    window.desktop.setTrayState(state, server.name)
+  }, [state, server.name])
+  const toggleRef = useRef(toggle)
+  useEffect(() => {
+    toggleRef.current = toggle
+  }, [toggle])
+  useEffect(() => window.desktop.onTrayToggle(() => toggleRef.current()), [])
+
   // Keep checking the status
   useEffect(() => {
     const t = setInterval(refresh, Number(settings.refreshSeconds) * 1000)
@@ -171,10 +182,7 @@ function VpnApp({ session, onLogout, onSession }: { session: Session; onLogout: 
       {/* sidebar: a floating rounded panel. Icons only when the window is narrow */}
       <aside className="relative flex w-16 shrink-0 flex-col rounded-2xl bg-sidebar p-2 ring-1 ring-white/[0.06] backdrop-blur-xl md:w-60 md:p-3">
         <div className="mb-6 flex items-center justify-center gap-2.5 px-2 pt-3 md:justify-start">
-          <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-emerald-300/30 to-indigo-400/20 ring-1 ring-white/10">
-            <Shield className="size-4" />
-          </div>
-          <span className="hidden font-heading text-[1.05rem] font-semibold tracking-tight md:inline">NekoTun</span>
+          <Wordmark />
         </div>
 
         <nav className="flex flex-col gap-1">

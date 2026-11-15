@@ -29,3 +29,12 @@ interface Window {
     changePassword: (oldPassword: string, newPassword: string) => Promise<LoginResult>
   }
 }
+
+interface Window {
+  desktop: {
+    setTrayState: (state: string, server: string) => void
+    onTrayToggle: (callback: () => void) => () => void
+    getStartup: () => Promise<boolean>
+    setStartup: (on: boolean) => Promise<{ ok: true; enabled: boolean } | { ok: false; error: string }>
+  }
+}

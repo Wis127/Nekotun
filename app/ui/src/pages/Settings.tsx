@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
+
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -44,6 +47,16 @@ export function Settings({ settings, update, dns, vpnOn, onDnsChanged }: Props) 
             checked={settings.notifications}
             onChange={(v) => update("notifications", v)}
           />
+          <Separator />
+          <StartupRow />
+          <Separator />
+          <ToggleRow
+            id="tray"
+            title="Keep running in the tray"
+            text="Closing the window hides NekoTun next to the clock. Quit from the tray menu."
+            checked
+            disabled
+          />
         </CardContent>
       </Card>
 
@@ -78,8 +91,6 @@ export function Settings({ settings, update, dns, vpnOn, onDnsChanged }: Props) 
         </CardHeader>
         <CardContent className="flex flex-col gap-4 opacity-60">
           <ToggleRow id="kill" title="Kill switch" text="Block all internet if the VPN drops." disabled />
-          <Separator />
-          <ToggleRow id="boot" title="Launch at startup" text="Start NekoTun when Windows starts." disabled />
         </CardContent>
       </Card>
 
@@ -118,5 +129,35 @@ function ToggleRow({ id, title, text, checked = false, onChange, disabled }: Tog
       </div>
       <Switch id={id} checked={checked} onCheckedChange={(v) => onChange?.(v)} disabled={disabled} />
     </div>
+  )
+}
+
+// Real "launch at startup" (a Task Scheduler task, so it starts with admin rights)
+function StartupRow() {
+  const [on, setOn] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    window.desktop.getStartup().then(setOn)
+  }, [])
+
+  async function change(v: boolean) {
+    setBusy(true)
+    const r = await window.desktop.setStartup(v)
+    setBusy(false)
+    if (!r.ok) return toast.error("Couldn't change startup", { description: r.error })
+    setOn(r.enabled)
+    toast.success(r.enabled ? "NekoTun will start with Windows" : "Won't start with Windows")
+  }
+
+  return (
+    <ToggleRow
+      id="boot"
+      title="Launch at startup"
+      text="Start NekoTun in the tray when you sign in to Windows. Pairs well with Connect on launch."
+      checked={!!on}
+      onChange={change}
+      disabled={on === null || busy}
+    />
   )
 }
