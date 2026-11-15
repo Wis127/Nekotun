@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, net } = require("electron");
 const { execFile } = require("child_process");
 const path = require("path");
 const auth = require("./auth");
+const startup = require("./startup");
+const { createTray } = require("./tray");
 
 const PROJECT = path.join(__dirname, ".."); // C:\codes\VPN
 const DEV_URL = process.env.DEV_URL; // set by "bun run dev"
@@ -11,7 +13,7 @@ const VPN_EXE = path.join(PROJECT, ".venv", "Scripts", "vpn.exe");
 
 // Run one of OUR commands with arguments, e.g. vpn(["wg-split", "--mode", "all"])
 function vpn(args) {
-  const commands = ["wg-up", "wg-down", "wg-status", "wg-stats", "wg-split", "wg-apps"];
+  const commands = ["wg-up", "wg-down", "wg-status", "wg-stats", "wg-split", "wg-apps", "wg-dns"];
   if (!Array.isArray(args) || !commands.includes(args[0])) throw new Error("not allowed");
   if (!args.every((a) => typeof a === "string" && a.length < 256)) throw new Error("bad argument");
   return new Promise((resolve) => {
@@ -50,6 +52,12 @@ async function publicIp() {
 }
 
 ipcMain.handle("vpn", (_event, command) => vpn([command]));
+// wg-dns: only our four named choices can be sent
+ipcMain.handle("vpn:dns", (_event, choice) => {
+  if (choice === undefined) return vpn(["wg-dns"]);
+  if (!["shield", "cloudflare", "google", "quad9"].includes(choice)) throw new Error("bad DNS choice");
+  return vpn(["wg-dns", `--set=${choice}`]);
+});
 ipcMain.handle("vpn:split", (_event, mode, routes, apps) => split(mode, routes, apps));
 ipcMain.handle("ip", () => publicIp());
 ipcMain.handle("auth:login", (_e, user, password, remember) => auth.login(user, password, !!remember));
@@ -57,8 +65,32 @@ ipcMain.handle("auth:restore", () => auth.restore());
 ipcMain.handle("auth:logout", () => auth.logout());
 ipcMain.handle("auth:change", (_e, oldPw, newPw) => auth.changePassword(oldPw, newPw));
 
+ipcMain.handle("startup:get", () => startup.isEnabled());
+ipcMain.handle("startup:set", (_e, on) => startup.setEnabled(!!on));
+
+// --- window + tray -----------------------------------------------------------
+let win = null;
+let tray = null;
+let quitting = false; // true only when the user really quits
+
+// Only one NekoTun at a time: a second launch just shows the first one.
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on("second-instance", () => showWindow());
+
+function showWindow() {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+// The page tells us the VPN state; the tray mirrors it
+ipcMain.on("tray:state", (_e, state, server) => tray && tray.update(state, server));
+
 app.whenReady().then(() => {
-  const win = new BrowserWindow({
+  const startHidden = process.argv.includes("--hidden"); // launched at startup
+
+  win = new BrowserWindow({
     width: 1100,
     height: 720,
     minWidth: 420,
@@ -66,15 +98,40 @@ app.whenReady().then(() => {
     show: false, // show once ready, so there's no white flash
     backgroundColor: "#0a0a0a",
     autoHideMenuBar: true,
+    // your icon for the window + taskbar (if assets/tray.png exists)
+    ...(require("fs").existsSync(path.join(__dirname, "assets", "tray.png"))
+      ? { icon: path.join(__dirname, "assets", "tray.png") }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, // page can't reach Node directly
       nodeIntegration: false,
     },
   });
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    if (!startHidden) win.show();
+  });
+
+  // Closing the window keeps NekoTun running in the tray (the VPN stays as it is)
+  win.on("close", (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+  });
+
+  tray = createTray({
+    onShow: showWindow,
+    onToggle: () => win.webContents.send("tray:toggle"), // the page runs the same toggle as its button
+    onQuit: () => {
+      quitting = true;
+      app.quit();
+    },
+  });
+
   if (DEV_URL) win.loadURL(DEV_URL); // live-reload while designing
   else win.loadFile(path.join(__dirname, "ui", "dist", "index.html"));
 });
 
-app.on("window-all-closed", () => app.quit());
+app.on("before-quit", () => {
+  quitting = true;
+});

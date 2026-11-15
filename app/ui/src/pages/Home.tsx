@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Clock, Globe as GlobeIcon, HeartPulse, Power, Server as ServerIcon, ShieldCheck } from "lucide-react"
+import { ArrowDown, ArrowUp, Clock, Globe as GlobeIcon, HeartPulse, Power, Server as ServerIcon, ShieldCheck, ShieldBan } from "lucide-react"
 
 import { Globe } from "@/components/Globe"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,10 +21,11 @@ type Props = {
   server: Server
   connectedFor: number | null // ms, null when not connected
   traffic: Traffic
+  adblock: boolean
   onToggle: () => void
 }
 
-export function Home({ state, ip, server, connectedFor, traffic, onToggle }: Props) {
+export function Home({ state, ip, server, connectedFor, traffic, adblock, onToggle }: Props) {
   const on = state === "connected"
   const working = state === "connecting" || state === "disconnecting"
   const tone = on ? "emerald" : working ? "amber" : "rose"
@@ -89,6 +90,12 @@ export function Home({ state, ip, server, connectedFor, traffic, onToggle }: Pro
             <Clock className="size-3.5 text-muted-foreground" />
             <span className="font-mono tabular">{connectedFor === null ? "00:00:00" : formatDuration(connectedFor)}</span>
           </Chip>
+          {on && adblock && (
+            <Chip>
+              <ShieldBan className="size-3.5 text-emerald-300" />
+              Ads blocked
+            </Chip>
+          )}
         </div>
       </section>
 

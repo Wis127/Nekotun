@@ -4,39 +4,73 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## How to work with this user
 
-- The user is a programming beginner building this project **to learn**. Do not write the implementation for them: explain the concept, give the task, hints, and a way to check it works, then review the code they paste.
-- Keep explanations **brief and simple**: short sentences, plain words, a small example or diagram where it helps. No long, detailed write-ups.
-- Run commands or edit files only when the user asks.
+- The user is a programming beginner building this project **to learn**. Explain concepts simply, give a way to check things work, and review code they paste. When they ask for the code or ask you to build something, do it, and explain it briefly.
+- Keep explanations **brief and simple**: short sentences, plain words, a small example or table where it helps.
+- Run commands or edit files only when the user asks. Never run tests or scripts against their running server unless asked.
+- Server (AWS) steps are done by the user: give exact commands and say clearly which machine each one runs on (PC PowerShell vs server SSH).
 
-## Project
+## Project: NekoTun
 
-A Windows VPN client app in Python. It does **not** implement a VPN protocol itself. It drives the VPN client built into Windows: the user supplies a server IP and a username/password, and the app creates, connects, disconnects and removes a VPN profile.
+A personal VPN: a **WireGuard** tunnel to an AWS server, a **Python engine + login server**, and an **Electron desktop app**.
 
-- Profiles: PowerShell `VpnClient` cmdlets (`Add-VpnConnection`, `Get-VpnConnection | ConvertTo-Json`, `Remove-VpnConnection`), run via `subprocess`.
-- Dial / hang up: `rasdial <name> <user> <password>` and `rasdial <name> /disconnect`. The exit code is the RAS error code (e.g. 691, 800, 809, 868, 13801).
-- Protocol: IKEv2 by default, which requires `-AuthenticationMethod Eap` (EAP-MSCHAPv2). SSTP/L2TP use `MSChapv2`, and L2TP also needs `-L2tpPsk`.
-- User input put into PowerShell strings must be single-quoted with `'` doubled (prevents command injection).
-- Actually connecting needs a real server (planned: strongSwan IKEv2 on a Linux VPS). Profiles can be created and removed without one.
+```
+Electron app (app/) ──runs──► .venv\Scripts\vpn.exe wg-...   (Python CLI → wg.py → wireguard.exe / wg.exe)
+       │
+       └──TLS :9000──► server.py on AWS ──► auth.py ──► users.json      (login, tokens, change password)
+PC ══WireGuard UDP :51820══► wg0 on AWS ──► NAT ──► internet
+```
+
+Rule: **Python owns the logic** (VPN control, auth, protocol). The CLI and the Electron app are only interfaces that call it.
 
 ## Layout
 
-- `src/vpn/winvpn.py`: the engine (functions that call PowerShell/rasdial and raise `VpnError`).
-- `src/vpn/cli.py`: the `argparse` interface (subcommands: setup, connect, disconnect, status, remove). A tkinter GUI is planned and should call the same engine functions.
-- `src/vpn/__init__.py`: `main()` entry point (`vpn = "vpn:main"` in `pyproject.toml`).
+### Python (`src/vpn/`, package `vpn`, run with `uv`)
+- `wg.py`: WireGuard engine. Key pairs (X25519), client/server config templates, `connect`/`disconnect`/`status` (`wireguard.exe /installtunnelservice`), `stats` (`wg.exe show <name> transfer`), split tunneling (`allowed_ips_for`, `set_split`, app IP learning via `Get-NetTCPConnection`). Raises `WgError`.
+- `cli.py`: `argparse` CLI: `wg-keys`, `wg-config --server IP [--force]`, `wg-up`, `wg-down`, `wg-status`, `wg-stats`, `wg-split [--mode all|include|exclude --route=... --app=...]`, `wg-apps`. Configs live in `<project>/wg-configs/` (found from `__file__`).
+- `server.py`: TLS login + proxy server (runs on AWS). Request kinds: `PASS` (password → token), `TOKEN`, `CHANGE` (change password, revokes other tokens), then `MUX` or a single `host:port` target. Lockout (5 fails / 60 s), tokens in memory (TTL 1 h), `ipaddress.is_global` check on targets. `HOST` from `VPN_HOST` env (default `127.0.0.1`).
+- `auth.py`: scrypt password hashing, `users.json`. `python3 auth.py <name>` adds/updates a user.
+- `protocol.py`: `[4-byte length][data]` framing (`send_msg`, `recv_msg`, `recv_exact`, `pipe`).
+- `mux.py`: many streams over one tunnel (`[stream id][type][payload]`).
+- `socks_client.py`: local SOCKS5 proxy (127.0.0.1:1080) that tunnels through `server.py` on AWS. `--mux` shares one connection.
 
-`winvpn.py` and `cli.py` were first scaffolded by Claude as a reference. The user may delete them and rebuild them step by step (learning roadmap: manual PowerShell → subprocess → quoting → profiles → status/JSON → rasdial → error messages → CLI → GUI/keyring).
+### Electron app (`app/`, uses Bun)
+- `main.js`: window + IPC. Runs only allow-listed `vpn.exe` commands via `execFile` (no shell) and validates every argument. Fetches the public IP.
+- `preload.js`: the only bridge to the page (`window.vpn`, `window.auth`). `contextIsolation` on, `nodeIntegration` off.
+- `auth.js`: login client for `server.py` (same protocol as `socks_client.py`). Token stays in the main process, saved encrypted with `safeStorage`.
+- `certs/server-cert.pem`: the AWS server's **public** TLS cert (trusted via `ca:`, cert is for IP `16.4.103.77`).
+- `ui/`: React + Vite + Tailwind v4 + shadcn/ui (base-ui style). Pages in `ui/src/pages/` (Home with `components/Globe.tsx` (cobe), Servers, Split, Activity, Settings, Profile, Login). Server list in `ui/src/lib/vpn.ts`.
 
 ## Commands
 
-Uses `uv` (Python 3.11). No tests or linter are set up yet.
-
 ```powershell
-uv sync                                  # install / create .venv
-uv run vpn setup --server 1.2.3.4        # --type Ikev2|Sstp|L2tp|Pptp|Automatic, --name (default PyVPN)
-uv run vpn status
-uv run vpn connect --user alice          # prompts for password
-uv run vpn disconnect
-uv run vpn remove
+uv sync                                   # Python deps / .venv (the app needs .venv\Scripts\vpn.exe)
+uv run vpn --help
+uv run vpn wg-config --server 16.4.103.77 # new keys + configs in wg-configs/ (refuses to overwrite without --force)
+uv run vpn wg-up | wg-down | wg-status    # wg-up/wg-down need an ADMIN terminal
+uvx ruff check src/                       # Python lint
+
+cd app; bun install; bun run start        # build UI + open the app (run as admin to connect)
+cd app; bun run dev                       # live-reload UI while designing
+cd app\ui; bun run build                  # type-check + build UI only
 ```
 
-Use `192.0.2.x` (a reserved test IP that never connects) when testing profile creation without a server.
+`bun run start` must be run in `app\`, not `app\ui\`.
+
+## Server (AWS Lightsail, Ubuntu 24.04, Mumbai, `16.4.103.77`)
+
+- WireGuard: `/etc/wireguard/wg0.conf`, `wg-quick@wg0`, NAT on `ens5`, `net.ipv4.ip_forward=1`.
+- Login server: files in `/opt/nekotun/vpn/` (`__init__.py server.py auth.py protocol.py mux.py`, plus `cert.pem`, `key.pem`, `users.json` made on the server). systemd unit `nekotun` (`VPN_HOST=0.0.0.0`, `PYTHONPATH=/opt/nekotun`, `python3 -m vpn.server`). Logs: `sudo journalctl -u nekotun -f`.
+- Lightsail firewall: UDP 51820 and TCP 9000 (plus SSH 22).
+- Deploying a change to `server.py`: `scp` it from the PC, `sudo mv` into `/opt/nekotun/vpn/`, `sudo systemctl restart nekotun` (this clears tokens).
+- Server code uses only the Python standard library.
+
+## Security rules
+
+- Never commit secrets: `wg-configs/`, `users.json`, `key.pem`, SSH `.pem` keys (kept in `%USERPROFILE%\.ssh\`). Check `git status` before committing.
+- Never disable TLS certificate or hostname checks.
+- User input that reaches a command must be passed as an argument list (never a shell string) and validated (see `main.js` `split()` and `wg.parse_route`).
+- Private keys never leave the machine they were made on.
+
+## Ideas not done yet
+
+SQLite for users/tokens, `vpn login` CLI so the app uses Python auth (then delete `auth.js`), per-user WireGuard keys + device list + phone QR, kill switch, DNS choice, tray icon, installer.

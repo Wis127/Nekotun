@@ -1,5 +1,6 @@
+import { Logo } from "@/components/Logo"
 import { useState } from "react"
-import { CircleAlert, Loader2, Lock, Shield } from "lucide-react"
+import { CircleAlert, Loader2, Lock } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -35,8 +36,8 @@ export function Login({ onLogin }: { onLogin: (s: Session) => void }) {
       <Card className="relative w-full max-w-sm">
         <form onSubmit={submit} className="contents">
           <CardHeader className="items-center text-center">
-            <div className="mx-auto mb-2 grid size-12 place-items-center rounded-full bg-primary/10">
-              <Shield className="size-6 text-primary" />
+            <div className="mx-auto mb-2 grid size-12 place-items-center rounded-2xl bg-emerald-300/[0.08] ring-1 ring-emerald-300/15">
+              <Logo className="size-7" />
             </div>
             <CardTitle className="text-xl">Sign in to NekoTun</CardTitle>
             <CardDescription>Use the account created on your VPN server</CardDescription>

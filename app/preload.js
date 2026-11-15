@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("vpn", {
   getSplit: () => ipcRenderer.invoke("vpn:split"),
   setSplit: (mode, routes, apps) => ipcRenderer.invoke("vpn:split", mode, routes, apps),
   apps: () => ipcRenderer.invoke("vpn", "wg-apps"),
+  getDns: () => ipcRenderer.invoke("vpn:dns"),
+  setDns: (choice) => ipcRenderer.invoke("vpn:dns", choice),
 });
 
 // Login. The token stays in main.js — the page only sees the username.
@@ -18,4 +20,16 @@ contextBridge.exposeInMainWorld("auth", {
   restore: () => ipcRenderer.invoke("auth:restore"),
   logout: () => ipcRenderer.invoke("auth:logout"),
   changePassword: (oldPw, newPw) => ipcRenderer.invoke("auth:change", oldPw, newPw),
+});
+
+// Tray + launch at startup
+contextBridge.exposeInMainWorld("desktop", {
+  setTrayState: (state, server) => ipcRenderer.send("tray:state", state, server),
+  onTrayToggle: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("tray:toggle", listener);
+    return () => ipcRenderer.removeListener("tray:toggle", listener);
+  },
+  getStartup: () => ipcRenderer.invoke("startup:get"),
+  setStartup: (on) => ipcRenderer.invoke("startup:set", on),
 });
